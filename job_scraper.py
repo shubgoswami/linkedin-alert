@@ -23,11 +23,22 @@ def fetch_rendered_html(url):
     Returns the fully rendered HTML content.
     """
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(headless=True)  # Run in headless mode for GitHub Actions
         page = browser.new_page()
-        page.goto(url)
-        # Wait for job cards to appear on the page (timeout: 15 seconds)
-        page.wait_for_selector("li.base-search-card", timeout=15000)
+        page.goto(url, wait_until="domcontentloaded") # Wait for the initial HTML to be loaded
+
+        # Scroll down to load more jobs (if infinite scrolling is present)
+        # You might need to adjust the number of scrolls or the scroll amount
+        for _ in range(3): # Scroll down 3 times
+            page.mouse.wheel(0, 1000) # Scroll down 1000 pixels
+            page.wait_for_timeout(2000) # Wait for 2 seconds for content to load
+
+        # Wait for at least one job card to be visible, with a longer timeout
+        try:
+            page.wait_for_selector("li.base-search-card", timeout=30000) # Increased timeout to 30 seconds
+        except Exception as e:
+            print(f"Initial wait for selector failed, continuing to scrape: {e}")
+
         html = page.content()
         browser.close()
     return html
