@@ -3,6 +3,8 @@ import hashlib
 import requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
+import time # Import the time module for potential sleep
+
 
 # Fetch Telegram bot token and user ID from environment variables for security
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -25,19 +27,35 @@ def fetch_rendered_html(url):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)  # Run in headless mode for GitHub Actions
         page = browser.new_page()
-        page.goto(url, wait_until="domcontentloaded") # Wait for the initial HTML to be loaded
 
-        # Scroll down to load more jobs (if infinite scrolling is present)
-        # You might need to adjust the number of scrolls or the scroll amount
-        for _ in range(3): # Scroll down 3 times
-            page.mouse.wheel(0, 1000) # Scroll down 1000 pixels
-            page.wait_for_timeout(2000) # Wait for 2 seconds for content to load
+        print(f"Navigating to URL: {url}")
+        # Navigate and wait until network is idle
+        # This means no more than 0 network connections for at least 500 ms.
+        page.goto(url, wait_until="networkidle")
+        print("Page navigation complete, waiting for content...")
 
-        # Wait for at least one job card to be visible, with a longer timeout
+        # Introduce a short, explicit wait to ensure initial content settles
+        page.wait_for_timeout(3000) # Wait for 3 seconds after networkidle
+
+        # Scroll down multiple times to trigger lazy loading of jobs
+        # We can also check for a specific scrollable element if LinkedIn uses one
+        # For general scrolling, repeat the scroll action
+        for i in range(5): # Increased to 5 scrolls for more aggressive loading
+            print(f"Scrolling down (attempt {i+1})...")
+            page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
+            page.wait_for_timeout(2000) # Wait for 2 seconds after each scroll
+
+        # Attempt to wait for the selector again, but with a potentially more specific condition
+        # For example, we can wait until the element is "attached" to the DOM, not just visible.
+        # Or, we can simply rely on the content being present after scrolling.
         try:
-            page.wait_for_selector("li.base-search-card", timeout=30000) # Increased timeout to 30 seconds
+            # Let's try waiting for the selector to be attached, which is a weaker condition than 'visible'
+            # and might indicate it's in the DOM even if not fully rendered/interactive yet.
+            page.wait_for_selector("li.base-search-card", state="attached", timeout=45000) # Increased timeout significantly
+            print("Successfully found 'li.base-search-card' after extended wait.")
         except Exception as e:
-            print(f"Initial wait for selector failed, continuing to scrape: {e}")
+            print(f"Final wait for selector failed: {e}. Attempting to get page content anyway.")
+
 
         html = page.content()
         browser.close()
@@ -49,6 +67,7 @@ def extract_jobs_from_html(html):
     Returns a list of job dicts containing title, company, location, posted date, uid, and URL.
     """
     soup = BeautifulSoup(html, 'html.parser')
+    # Use a more robust selector if needed, but 'base-search-card' looks okay from page-source.html
     job_elements = soup.find_all("li", class_="base-search-card")
     jobs = []
 
@@ -78,7 +97,8 @@ def extract_jobs_from_html(html):
                 "url": url
             })
         except Exception as e:
-            print(f"Failed to parse job: {e}")
+            print(f"Failed to parse job: {e} for element: {job_elem}") # Added job_elem to debug
+            continue # Continue to the next job element even if one fails
 
     return jobs
 
@@ -97,32 +117,31 @@ def send_telegram_message(message):
         print(f"Failed to send Telegram message: {response.text}")
 
 def main():
-    print("Starting job scrape...")  # Debug print
+    print("Starting job scrape...")
 
-    new_jobs = []
+    all_scraped_jobs = [] # Collect all jobs from all URLs
 
     for url in LINKEDIN_URLS:
-        print(f"Fetching URL: {url}")  # Debug print
+        print(f"Processing URL: {url}")
         html = fetch_rendered_html(url)
         jobs = extract_jobs_from_html(html)
-        print(f"Found {len(jobs)} jobs")  # Debug print
-        new_jobs.extend(jobs)
+        print(f"Found {len(jobs)} jobs from {url}")
+        all_scraped_jobs.extend(jobs)
 
-    if new_jobs:
+    if all_scraped_jobs:
         message = "<b>New LinkedIn Job Alerts:</b>\n"
-        for job in new_jobs:
+        for job in all_scraped_jobs:
             message += (
                 f"\n• <b>Title</b>: {job['title']}"
                 f"\n  <b>Company</b>: {job['company']}"
                 f"\n  <b>Location</b>: {job['location']}"
                 f"\n  <b>Posted</b>: {job['posted']}"
-                f"\n  <b>UID</b>: {job['uid']}"
-                f"\n  <b>Link</b>: {job['url']}\n"
+                f"\n  <b>Link</b>: {job['url']}\n" # Removed UID from Telegram message for brevity
             )
-        print("Sending message to Telegram...")  # Debug print
+        print("Sending message to Telegram...")
         send_telegram_message(message)
     else:
-        print("No new jobs found.")  # Debug print
+        print("No new jobs found across all URLs.")
 
 if __name__ == "__main__":
     main()
