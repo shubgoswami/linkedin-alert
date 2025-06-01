@@ -56,27 +56,38 @@ def send_telegram_message(message):
 
 
 def main():
+    print("Starting job scrape...")  # ✅ Debug print
+    seen_jobs = set()
     new_jobs = []
 
     headers = {"User-Agent": "Mozilla/5.0"}
 
     for url in LINKEDIN_URLS:
+        print(f"Fetching URL: {url}")  # ✅ Debug print
         resp = requests.get(url, headers=headers)
+        print(f"Status code: {resp.status_code}")  # ✅ Debug print
         jobs = extract_jobs_from_html(resp.text)
-        new_jobs.extend(jobs)
+        print(f"Found {len(jobs)} jobs")  # ✅ Debug print
+
+        for job in jobs:
+            new_jobs.append(job)
 
     if new_jobs:
-        message = "<b>New LinkedIn Job Alerts (Last 1 Hour):</b>\n"
+        message = "<b>New LinkedIn Job Alerts:</b>\n"
         for job in new_jobs:
             message += (
-                f"\n• <b>UID</b>: {job['uid']}"
-                f"\n  <b>Title</b>: {job['title']}"
+                f"\n• <b>Title</b>: {job['title']}"
                 f"\n  <b>Company</b>: {job['company']}"
                 f"\n  <b>Location</b>: {job['location']}"
                 f"\n  <b>Posted</b>: {job['posted']}"
+                f"\n  <b>UID</b>: {job['uid']}"
                 f"\n  <b>Link</b>: {job['url']}\n"
             )
+        print("Sending message to Telegram...")  # ✅ Debug print
         send_telegram_message(message)
+    else:
+        print("No new jobs found.")  # ✅ Debug print
+
 
 if __name__ == "__main__":
     main()
