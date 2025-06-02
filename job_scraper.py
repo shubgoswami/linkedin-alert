@@ -16,7 +16,8 @@ if not TELEGRAM_BOT_TOKEN or not TELEGRAM_USER_ID:
 # LinkedIn URLs to scrape jobs from
 LINKEDIN_URLS = [
     "https://www.linkedin.com/jobs/search/?f_TPR=r86400&geoId=102454443&keywords=product%20manager",
-    "https://www.linkedin.com/jobs/search/?f_TPR=r86400&geoId=104305776&keywords=product%20manager"
+    "https://www.linkedin.com/jobs/search/?f_TPR=r86400&geoId=104305776&keywords=product%20manager",
+    "https://jobs.careem.com/?locations=Dubai%2C+United+Arab+Emirates&locations=Abu+Dhabi%2C+United+Arab+Emirates&query=product+manager"
 ]
 
 def fetch_rendered_html(url):
