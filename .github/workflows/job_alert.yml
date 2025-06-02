@@ -20,11 +20,12 @@ jobs:
 
       - name: Install dependencies including Playwright browsers
         run: |
-          pip install beautifulsoup4 requests playwright
+          pip install beautifulsoup4 requests playwright playwright-extra playwright-stealth
           playwright install
 
       - name: Run scraper script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_USER_ID: ${{ secrets.TELEGRAM_USER_ID }}
+          LINKEDIN_COOKIES: ${{ secrets.LINKEDIN_COOKIES }} # Add this line
         run: python job_scraper.py

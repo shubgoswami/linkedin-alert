@@ -3,63 +3,119 @@ import hashlib
 import requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
-import time # Import the time module for potential sleep
+import time
+import json
+import random # Import the random module
 
+# For Playwright Stealth - you'll need to install this library
+# pip install playwright-extra playwright-stealth
+from playwright_stealth import stealth_sync
 
 # Fetch Telegram bot token and user ID from environment variables for security
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_USER_ID = os.environ.get("TELEGRAM_USER_ID")
+# Fetch LinkedIn cookies from environment variables
+LINKEDIN_COOKIES_JSON = os.environ.get("LINKEDIN_COOKIES")
 
 if not TELEGRAM_BOT_TOKEN or not TELEGRAM_USER_ID:
     raise ValueError("Telegram Bot Token or User ID is not set. Please configure them properly.")
+if not LINKEDIN_COOKIES_JSON:
+    raise ValueError("LINKEDIN_COOKIES is not set. Please configure it in GitHub Secrets.")
 
 # LinkedIn URLs to scrape jobs from
 LINKEDIN_URLS = [
     "https://www.linkedin.com/jobs/search/?f_TPR=r86400&geoId=102454443&keywords=product%20manager",
-    "https://www.linkedin.com/jobs/search/?f_TPR=r86400&geoId=104305776&keywords=product%20manager",
-    "https://jobs.careem.com/?locations=Dubai%2C+United+Arab+Emirates&locations=Abu+Dhabi%2C+United+Arab+Emirates&query=product+manager"
+    "https://www.linkedin.com/jobs/search/?f_TPR=r86400&geoId=104305776&keywords=product%20manager"
 ]
+
+# Function to generate a random delay
+def random_delay(min_sec=1, max_sec=4):
+    time.sleep(random.uniform(min_sec, max_sec))
 
 def fetch_rendered_html(url):
     """
-    Uses Playwright to open the page and wait for job listings to load.
+    Uses Playwright to open the page, inject cookies, and wait for job listings to load.
+    Includes stealth measures and randomized delays.
     Returns the fully rendered HTML content.
     """
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)  # Run in headless mode for GitHub Actions
-        page = browser.new_page()
+        # Launch browser with headless mode for GitHub Actions
+        browser = p.chromium.launch(headless=True)
+
+        # Create a new browser context with a human-like user agent
+        # and apply stealth settings
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        stealth_sync(context) # Apply stealth to the context
+
+        try:
+            cookies = json.loads(LINKEDIN_COOKIES_JSON)
+            context.add_cookies(cookies)
+            print("Successfully loaded and added cookies to Playwright context.")
+        except json.JSONDecodeError as e:
+            print(f"Error parsing LINKEDIN_COOKIES_JSON: {e}")
+            print("Please ensure your LINKEDIN_COOKIES secret is valid JSON.")
+            context.close() # Close context and browser on error
+            browser.close()
+            return "" # Return empty if cookies are invalid
+
+        page = context.new_page()
 
         print(f"Navigating to URL: {url}")
-        # Navigate and wait until network is idle
-        # This means no more than 0 network connections for at least 500 ms.
-        page.goto(url, wait_until="networkidle")
-        print("Page navigation complete, waiting for content...")
-
-        # Introduce a short, explicit wait to ensure initial content settles
-        page.wait_for_timeout(3000) # Wait for 3 seconds after networkidle
-
-        # Scroll down multiple times to trigger lazy loading of jobs
-        # We can also check for a specific scrollable element if LinkedIn uses one
-        # For general scrolling, repeat the scroll action
-        for i in range(5): # Increased to 5 scrolls for more aggressive loading
-            print(f"Scrolling down (attempt {i+1})...")
-            page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
-            page.wait_for_timeout(2000) # Wait for 2 seconds after each scroll
-
-        # Attempt to wait for the selector again, but with a potentially more specific condition
-        # For example, we can wait until the element is "attached" to the DOM, not just visible.
-        # Or, we can simply rely on the content being present after scrolling.
         try:
-            # Let's try waiting for the selector to be attached, which is a weaker condition than 'visible'
-            # and might indicate it's in the DOM even if not fully rendered/interactive yet.
-            page.wait_for_selector("li.base-search-card", state="attached", timeout=45000) # Increased timeout significantly
-            print("Successfully found 'li.base-search-card' after extended wait.")
-        except Exception as e:
-            print(f"Final wait for selector failed: {e}. Attempting to get page content anyway.")
+            # Navigate and wait until 'domcontentloaded' with increased timeout
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            print("Page navigation complete, waiting for content...")
+            random_delay(3, 7) # Longer, randomized initial delay
 
+            # Attempt to close common sign-in or other pop-up modals
+            # These might still appear even with authentication if the session is old
+            # or for other prompts (e.g., notifications).
+            close_button_selectors = [
+                'button.modal__dismiss',
+                'button.cta-modal__dismiss-btn',
+                'button[aria-label="Dismiss"]',
+                'button[data-modal="blurred-overlay-jobs-sign-in-modal"]'
+            ]
+            for selector in close_button_selectors:
+                if page.is_visible(selector):
+                    print(f"Attempting to close modal with selector: {selector}")
+                    try:
+                        page.click(selector)
+                        random_delay(2, 4) # Randomized delay after clicking
+                        if not page.is_visible(selector):
+                            print(f"Modal closed successfully with selector: {selector}")
+                            break
+                    except Exception as click_error:
+                        print(f"Error clicking {selector}: {click_error}. Continuing...")
+                else:
+                    print(f"Modal close button '{selector}' not visible.")
+
+
+            # Scroll down multiple times to trigger lazy loading of jobs
+            for i in range(5):
+                print(f"Scrolling down (attempt {i+1})...")
+                # Use evaluate for more controlled scrolling, simulating user behavior
+                page.evaluate("window.scrollBy(0, document.body.scrollHeight/5)") # Scroll by partial height
+                random_delay(2, 5) # Randomized delay after each scroll
+
+            # Final wait for job cards (expecting them to be visible now)
+            try:
+                page.wait_for_selector("li.base-search-card", state="visible", timeout=45000)
+                print("Successfully found 'li.base-search-card' after extended wait.")
+            except Exception as e:
+                print(f"Final wait for selector failed: {e}. Attempting to get page content anyway.")
+
+        except Exception as e:
+            print(f"Page.goto failed or other critical error during navigation/interaction: {e}. URL: {url}")
+            context.close()
+            browser.close()
+            return "" # Return empty HTML if navigation/interaction fails
 
         html = page.content()
-        browser.close()
+        context.close() # Close the context
+        browser.close() # Close the browser
     return html
 
 def extract_jobs_from_html(html):
@@ -67,8 +123,10 @@ def extract_jobs_from_html(html):
     Parses the rendered HTML to extract job information using BeautifulSoup.
     Returns a list of job dicts containing title, company, location, posted date, uid, and URL.
     """
+    if not html: # Handle case where html is empty due to navigation failure
+        return []
+
     soup = BeautifulSoup(html, 'html.parser')
-    # Use a more robust selector if needed, but 'base-search-card' looks okay from page-source.html
     job_elements = soup.find_all("li", class_="base-search-card")
     jobs = []
 
@@ -98,8 +156,8 @@ def extract_jobs_from_html(html):
                 "url": url
             })
         except Exception as e:
-            print(f"Failed to parse job: {e} for element: {job_elem}") # Added job_elem to debug
-            continue # Continue to the next job element even if one fails
+            print(f"Failed to parse job: {e} for element: {job_elem}")
+            continue
 
     return jobs
 
@@ -120,7 +178,7 @@ def send_telegram_message(message):
 def main():
     print("Starting job scrape...")
 
-    all_scraped_jobs = [] # Collect all jobs from all URLs
+    all_scraped_jobs = []
 
     for url in LINKEDIN_URLS:
         print(f"Processing URL: {url}")
@@ -137,7 +195,7 @@ def main():
                 f"\n  <b>Company</b>: {job['company']}"
                 f"\n  <b>Location</b>: {job['location']}"
                 f"\n  <b>Posted</b>: {job['posted']}"
-                f"\n  <b>Link</b>: {job['url']}\n" # Removed UID from Telegram message for brevity
+                f"\n  <b>Link</b>: {job['url']}\n"
             )
         print("Sending message to Telegram...")
         send_telegram_message(message)
